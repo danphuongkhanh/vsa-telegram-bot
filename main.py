@@ -1,30 +1,40 @@
 import os
+import time
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
-# Mở một trang web giả lập để Render nhận diện Bot đang chạy trên Web Service (Free)
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot VSA Telegram is running 24/7!")
-
-def start_health_check_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
-    server.serve_forever()
-
-# Kích hoạt web server chạy ngầm
-threading.Thread(target=start_health_check_server, daemon=True).start()
-import nest_asyncio
 import asyncio
 import re
 from datetime import datetime, timedelta
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from vnstock.api.quote import Quote
 from google import genai
 from google.genai import types
+
+# ==========================================
+# 1. KHỞI TẠO WEB SERVER SIÊU TỐC CHO RENDER
+# ==========================================
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write("Bot VSA Telegram đang hoạt động 24/7!".encode("utf-8"))
+        
+    def log_message(self, format, *args):
+        return  # Tắt bớt log HTTP thừa
+
+def run_health_check_server():
+    port = int(os.environ.get("PORT", 10000))
+    try:
+        server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+        print(f"🌐 Web Server cho Render đã kích hoạt trên Port {port}")
+        server.serve_forever()
+    except Exception as e:
+        print(f"⚠️ Lỗi khởi tạo Web Server: {e}")
+
+# Kích hoạt Web Server ở luồng riêng ngay lập tức
+threading.Thread(target=run_health_check_server, daemon=True).start()
 
 # ==========================================
 # CẤU HÌNH TOKEN VÀ KEY CỦA BẠN
@@ -35,7 +45,6 @@ GEMINI_API_KEY = "AQ.Ab8RN6KsYDQYkhJ8le1QM-jPZ7eMGIUCT5StP9Pi3KjvWCwl_g"
 MY_CHAT_ID = None
 WATCHLIST = ["SSI", "HPG", "PDR", "KBC", "MWG", "TCB", "VCI", "DIG", "CEO", "VHM"]
 
-nest_asyncio.apply()
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 WORKING_MODEL_CACHE = None
 
@@ -212,7 +221,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     MY_CHAT_ID = update.effective_chat.id
     welcome_text = (
         "🤖 **TRỢ LÝ CHỨNG KHOÁN VSA, TIN TỨC & CỔ PHIẾU SẮP LÊN SÀN!**\n\n"
-        "✅ Đã kết nối hệ thống tự động 24/7.\n\n"
+        "✅ Đã kết nối hệ thống tự động 24/7 trên Render.\n\n"
         "📌 **Các lệnh hỗ trợ:**\n"
         "• Gõ `/niemyet` hoặc nhắn `cổ phiếu sắp lên sàn`: Xem danh sách CP sắp IPO/chào sàn.\n"
         "• Gõ mã bất kỳ (Ví dụ: `VHM`, `SSI`): Phân tích VSA + Cổ tức + BCTC.\n"
@@ -257,17 +266,30 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result = analyze_vsa_and_news(symbol)
         await update.message.reply_text(result)
 
+async def post_init(application):
+    asyncio.create_task(auto_background_worker(application))
+
+# ==========================================
+# VÒNG LẶP KHỞI CHẠY CHỐNG SẬP (AUTO-RESTART)
+# ==========================================
+def main():
+    while True:
+        try:
+            print("🚀 Đang khởi chạy Telegram Bot Polling...")
+            app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
+            
+            app.add_handler(CommandHandler("start", start_command))
+            app.add_handler(CommandHandler("niemyet", upcoming_listings_command))
+            app.add_handler(CommandHandler("ipo", upcoming_listings_command))
+            app.add_handler(CommandHandler("canhbao", trigger_scan_command))
+            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+            
+            # Khởi chạy Polling không dùng tín hiệu ngắt OS để tránh crash trên Render
+            app.run_polling(drop_pending_updates=True, stop_signals=None)
+            
+        except Exception as e:
+            print(f"❌ Phát hiện lỗi trong luồng Bot: {e}. Hệ thống sẽ tự động khởi động lại sau 10 giây...")
+            time.sleep(10)
+
 if __name__ == '__main__':
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("niemyet", upcoming_listings_command))
-    app.add_handler(CommandHandler("ipo", upcoming_listings_command))
-    app.add_handler(CommandHandler("canhbao", trigger_scan_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-    
-    loop = asyncio.get_event_loop()
-    loop.create_task(auto_background_worker(app))
-    
-    print("🚀 Bot VSA Telegram đã hoạt động trên Server!")
-    app.run_polling()
+    main()
