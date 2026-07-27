@@ -1,5 +1,4 @@
 import os
-import time
 import threading
 import asyncio
 import re
@@ -12,7 +11,7 @@ from google import genai
 from google.genai import types
 
 # ==========================================
-# 1. KHỞI TẠO WEB SERVER SIÊU TỐC CHO RENDER
+# 1. KHỞI TẠO WEB SERVER ĐỂ RENDER WEB SERVICE FREE
 # ==========================================
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -22,7 +21,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write("Bot VSA Telegram đang hoạt động 24/7!".encode("utf-8"))
         
     def log_message(self, format, *args):
-        return  # Tắt bớt log HTTP thừa
+        return  # Tắt log HTTP thừa
 
 def run_health_check_server():
     port = int(os.environ.get("PORT", 10000))
@@ -31,13 +30,13 @@ def run_health_check_server():
         print(f"🌐 Web Server cho Render đã kích hoạt trên Port {port}")
         server.serve_forever()
     except Exception as e:
-        print(f"⚠️ Lỗi khởi tạo Web Server: {e}")
+        print(f"⚠️ Lỗi Web Server: {e}")
 
-# Kích hoạt Web Server ở luồng riêng ngay lập tức
+# Kích hoạt Web Server trên luồng riêng
 threading.Thread(target=run_health_check_server, daemon=True).start()
 
 # ==========================================
-# CẤU HÌNH TOKEN VÀ KEY CỦA BẠN
+# 2. CẤU HÌNH TOKEN VÀ KEY
 # ==========================================
 TELEGRAM_TOKEN = "8834290127:AAGTM96qbDdkcWbDaLoK1NIm9Q-Tr0H7u5M"
 GEMINI_API_KEY = "AQ.Ab8RN6KsYDQYkhJ8le1QM-jPZ7eMGIUCT5StP9Pi3KjvWCwl_g"
@@ -48,6 +47,9 @@ WATCHLIST = ["SSI", "HPG", "PDR", "KBC", "MWG", "TCB", "VCI", "DIG", "CEO", "VHM
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 WORKING_MODEL_CACHE = None
 
+# ==========================================
+# 3. CÁC HÀM XỬ LÝ DỮ LIỆU ĐỒNG BỘ (SYNC)
+# ==========================================
 def call_gemini_bulletproof(prompt, use_search=False):
     global WORKING_MODEL_CACHE
     
@@ -181,6 +183,9 @@ def get_daily_report(report_type="morning"):
         prompt = f"Lập BẢN TIN KẾT PHIÊN (15:15 PM) với dữ liệu VN-Index: {latest_vni}"
     return call_gemini_bulletproof(prompt, use_search=True)
 
+# ==========================================
+# 4. CÁC HÀM XỬ LÝ BẤT ĐỒNG BỘ (ASYNC HANDLERS)
+# ==========================================
 async def auto_background_worker(app):
     global MY_CHAT_ID
     already_sent_morning = False
@@ -193,12 +198,12 @@ async def auto_background_worker(app):
             
             if now.weekday() < 5:
                 if current_time == "08:45" and not already_sent_morning and MY_CHAT_ID:
-                    report = get_daily_report("morning")
+                    report = await asyncio.to_thread(get_daily_report, "morning")
                     await app.bot.send_message(chat_id=MY_CHAT_ID, text=f"☀️ **BÁO CÁO ĐẦU PHIÊN (08:45 AM)**\n\n{report}")
                     already_sent_morning = True
 
                 if current_time == "15:15" and not already_sent_evening and MY_CHAT_ID:
-                    report = get_daily_report("evening")
+                    report = await asyncio.to_thread(get_daily_report, "evening")
                     await app.bot.send_message(chat_id=MY_CHAT_ID, text=f"🌆 **BÁO CÁO KẾT PHIÊN (15:15 PM)**\n\n{report}")
                     already_sent_evening = True
 
@@ -207,7 +212,7 @@ async def auto_background_worker(app):
                     already_sent_evening = False
 
                 if "09:15" <= current_time <= "14:30" and now.minute % 15 == 0 and MY_CHAT_ID:
-                    alerts = scan_smart_money_signals()
+                    alerts = await asyncio.to_thread(scan_smart_money_signals)
                     for alert in alerts:
                         await app.bot.send_message(chat_id=MY_CHAT_ID, text=alert)
 
@@ -232,12 +237,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def upcoming_listings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 Đang quét thông tin doanh nghiệp/cổ phiếu sắp niêm yết lên sàn...")
-    result = get_upcoming_listings_report()
+    result = await asyncio.to_thread(get_upcoming_listings_report)
     await update.message.reply_text(result)
 
 async def trigger_scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 Đang quét dòng tiền lớn...")
-    alerts = scan_smart_money_signals()
+    alerts = await asyncio.to_thread(scan_smart_money_signals)
     if alerts:
         for alert in alerts:
             await update.message.reply_text(alert)
@@ -252,44 +257,34 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if any(k in clean_text for k in ["niêm yết", "lên sàn", "ipo", "chào sàn"]):
         await update.message.reply_text("🔍 Đang quét thông tin doanh nghiệp/cổ phiếu chuẩn bị lên sàn...")
-        result = get_upcoming_listings_report()
+        result = await asyncio.to_thread(get_upcoming_listings_report)
         await update.message.reply_text(result)
         
     elif "thị trường" in clean_text or "cập nhật" in clean_text:
         await update.message.reply_text("📊 Đang quét dữ liệu toàn thị trường...")
-        result = get_daily_report("evening")
+        result = await asyncio.to_thread(get_daily_report, "evening")
         await update.message.reply_text(result)
         
     elif re.match(r'^[a-zA-Z]{3,4}$', user_text):
         symbol = user_text.upper()
         await update.message.reply_text(f"🔍 Đang truy xuất VSA & Tin tức cho mã {symbol}...")
-        result = analyze_vsa_and_news(symbol)
+        result = await asyncio.to_thread(analyze_vsa_and_news, symbol)
         await update.message.reply_text(result)
 
 async def post_init(application):
     asyncio.create_task(auto_background_worker(application))
 
 # ==========================================
-# VÒNG LẶP KHỞI CHẠY CHỐNG SẬP (AUTO-RESTART)
+# 5. KHỞI CHẠY BOT DẠNG BẤT ĐỒNG BỘ CHUẨN
 # ==========================================
-def main():
-    while True:
-        try:
-            print("🚀 Đang khởi chạy Telegram Bot Polling...")
-            app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
-            
-            app.add_handler(CommandHandler("start", start_command))
-            app.add_handler(CommandHandler("niemyet", upcoming_listings_command))
-            app.add_handler(CommandHandler("ipo", upcoming_listings_command))
-            app.add_handler(CommandHandler("canhbao", trigger_scan_command))
-            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-            
-            # Khởi chạy Polling không dùng tín hiệu ngắt OS để tránh crash trên Render
-            app.run_polling(drop_pending_updates=True, stop_signals=None)
-            
-        except Exception as e:
-            print(f"❌ Phát hiện lỗi trong luồng Bot: {e}. Hệ thống sẽ tự động khởi động lại sau 10 giây...")
-            time.sleep(10)
-
 if __name__ == '__main__':
-    main()
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
+    
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("niemyet", upcoming_listings_command))
+    app.add_handler(CommandHandler("ipo", upcoming_listings_command))
+    app.add_handler(CommandHandler("canhbao", trigger_scan_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    
+    print("🚀 Bot VSA Telegram đang khởi chạy chuẩn Async trên Render...")
+    app.run_polling(drop_pending_updates=True)
