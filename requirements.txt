@@ -1,0 +1,5 @@
+python-telegram-bot
+vnstock
+google-genai
+nest-asyncio
+apscheduler
