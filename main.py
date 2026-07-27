@@ -1,4 +1,5 @@
 import os
+import time
 import threading
 import asyncio
 import re
@@ -36,10 +37,10 @@ def run_health_check_server():
 threading.Thread(target=run_health_check_server, daemon=True).start()
 
 # ==========================================
-# 2. CẤU HÌNH TOKEN VÀ KEY
+# 2. CẤU HÌNH TOKEN VÀ KEY (THAY KEY MỚI BẮT ĐẦU BẰNG AIzaSy... VÀO ĐÂY)
 # ==========================================
-TELEGRAM_TOKEN = "8834290127:AAGTM96qbDdkcWbDaLoK1NIm9Q-Tr0H7u5M"
-GEMINI_API_KEY = "AQ.Ab8RN6KsYDQYkhJ8le1QM-jPZ7eMGIUCT5StP9Pi3KjvWCwl_g"
+TELEGRAM_TOKEN = "8834290127:AAHX9rNmHD3NOZx8q7I39Jmmz999WU3t1dE"
+GEMINI_API_KEY = "AQ.Ab8RN6KAMnzQ_5EOfsun4KrYWpkJ4WZaSdghHHwIDndZOClZvg"
 
 MY_CHAT_ID = None
 WATCHLIST = ["SSI", "HPG", "PDR", "KBC", "MWG", "TCB", "VCI", "DIG", "CEO", "VHM"]
@@ -57,33 +58,14 @@ def call_gemini_bulletproof(prompt, use_search=False):
         tools=[types.Tool(google_search=types.GoogleSearch())]
     ) if use_search else None
 
-    if WORKING_MODEL_CACHE:
-        try:
-            res = ai_client.models.generate_content(
-                model=WORKING_MODEL_CACHE, 
-                contents=prompt,
-                config=search_config
-            )
-            return res.text
-        except Exception:
-            WORKING_MODEL_CACHE = None
-    
-    candidate_models = []
-    try:
-        for m in ai_client.models.list():
-            model_id = m.name if hasattr(m, 'name') else str(m)
-            clean_name = model_id.replace('models/', '')
-            if 'gemini' in clean_name.lower() and not any(x in clean_name.lower() for x in ['embed', 'imagen', 'audio', 'tts', 'bison']):
-                candidate_models.append(clean_name)
-    except Exception:
-        pass
+    # Ưu tiên các mô hình Gemini ổn định nhất
+    models_to_try = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']
+    if WORKING_MODEL_CACHE and WORKING_MODEL_CACHE in models_to_try:
+        models_to_try.remove(WORKING_MODEL_CACHE)
+        models_to_try.insert(0, WORKING_MODEL_CACHE)
 
-    fallback_list = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-flash', 'gemini-1.5-pro']
-    for fb in fallback_list:
-        if fb not in candidate_models:
-            candidate_models.append(fb)
-
-    for model_name in candidate_models:
+    last_error = None
+    for model_name in models_to_try:
         try:
             response = ai_client.models.generate_content(
                 model=model_name, 
@@ -93,18 +75,20 @@ def call_gemini_bulletproof(prompt, use_search=False):
             if response and response.text:
                 WORKING_MODEL_CACHE = model_name
                 return response.text
-        except Exception:
-            if search_config:
+        except Exception as e:
+            last_error = e
+            print(f"⚠️ Thử Gemini model '{model_name}' thất bại: {e}")
+            if use_search:
                 try:
                     response = ai_client.models.generate_content(model=model_name, contents=prompt)
                     if response and response.text:
                         WORKING_MODEL_CACHE = model_name
                         return response.text
-                except Exception:
-                    continue
+                except Exception as inner_e:
+                    last_error = inner_e
             continue
 
-    raise Exception("Không thể kết nối với mô hình Gemini.")
+    raise Exception(f"Lỗi kết nối Gemini API. Chi tiết: {last_error}")
 
 def get_upcoming_listings_report():
     try:
@@ -286,5 +270,5 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("canhbao", trigger_scan_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     
-    print("🚀 Bot VSA Telegram đang khởi chạy chuẩn Async trên Render...")
+    print("🚀 Bot VSA Telegram đang chạy...")
     app.run_polling(drop_pending_updates=True)
